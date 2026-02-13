@@ -4,82 +4,54 @@ import json
 import sys
 from faster_whisper import WhisperModel
 from typing import Optional
-from tqdm import tqdm  # <--- 新增：引入進度條套件
+from tqdm import tqdm
 
-# --- 新增：環境設定區 ---
+# --- 環境與路徑輔助函式 ---
 def detect_environment():
     """偵測是否在 Colab 環境"""
-    # 1. 檢查是否有 Colab 特有的環境變數 (適用於 !python 腳本執行)
-    if "COLAB_RELEASE_TAG" in os.environ or "COLAB_GPU" in os.environ:
-        return True
-    
-    # 2. 檢查 sys.modules (適用於 Notebook 互動模式)
-    if 'google.colab' in sys.modules:
-        return True
-        
-    return False
+    return "COLAB_RELEASE_TAG" in os.environ or 'google.colab' in sys.modules
 
-def get_paths():
-    """根據環境回傳正確的專案根目錄與音訊路徑"""
+def get_project_root():
+    """回傳專案根目錄"""
     if detect_environment():
-        print("☁️ 偵測到 Colab 環境")
-        from google.colab import drive
-        # 強制掛載 Google Drive
-        if not os.path.exists('/content/drive'):
-            drive.mount('/content/drive')
-        
-        # ⚠️ 注意：這裡假設您將專案上傳到了 Drive 的 "MyProject/whisper" 資料夾
-        # 請根據您實際的 Drive 結構修改這裡！
-        project_root = '/content/drive/MyDrive/MyProject/whisper'
+        if os.path.exists('/content/drive'):
+             pass
+        else:
+             print("⚠️ 注意：在腳本模式下無法互動掛載 Drive，請確保外部 Notebook 已執行 drive.mount()")
+        # ⚠️ 請確認您的 Drive 路徑是否正確
+        return '/content/drive/MyDrive/MyProject/whisper'
     else:
-        print("💻 偵測到本地環境")
-        # 取得目前檔案 (transcriber.py) 的上一層的上一層
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    audio_dir = os.path.join(project_root, "data", "audio")
-    return project_root, audio_dir
-
-# --- 原有的類別邏輯 (微調) ---
+# --- 核心轉錄類別 ---
 class PodcastTranscriber:
-    def __init__(self, model_size: str = "large-v3", device: str = "auto", compute_type: str = "float16"):
-        # 1. 取得專案根目錄 (我們之前寫的 detect_environment 邏輯會決定這是本地還是雲端路徑)
-        project_root, _ = get_paths()
-        
-        # 2. 設定模型存放路徑：存在專案底下的 "models" 資料夾
-        # 例如在 Colab 上會是：/content/drive/MyDrive/MyProject/whisper/models
+    def __init__(self, model_size: str, device: str, compute_type: str):
+        project_root = get_project_root()
         model_root = os.path.join(project_root, "models")
         
-        # 確保資料夾存在
         if not os.path.exists(model_root):
             os.makedirs(model_root)
 
         print(f"🚀 正在載入 Whisper 模型: {model_size} ({device}) | 精度: {compute_type}...")
-        print(f"📂 模型快取路徑: {model_root}")
-
+        
         try:
-            # 3. 關鍵修改：加入 download_root 參數
             self.model = WhisperModel(
                 model_size, 
                 device=device, 
                 compute_type=compute_type,
-                download_root=model_root  # <--- 就是這一行！
+                download_root=model_root
             )
             print("✅ 模型載入完成！")
         except Exception as e:
             print(f"❌ 模型載入失敗: {e}")
             raise
 
-    def transcribe_file(self, audio_path: str) -> Optional[str]:
-        """
-        轉錄單個音訊檔案，輸出 txt 和 json
-        """
+    def transcribe_file(self, audio_path: str, output_dir: str, language: str, initial_prompt: str) -> Optional[str]:
         if not os.path.exists(audio_path):
             print(f"❌ 錯誤：找不到檔案 {audio_path}")
             return None
 
         file_name = os.path.basename(audio_path)
-        # 輸出路徑改為相對路徑，確保跟隨 audio_path
-        output_dir = os.path.join(os.path.dirname(audio_path), "../transcripts")
         
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -88,7 +60,6 @@ class PodcastTranscriber:
         txt_path = os.path.join(output_dir, f"{base_name}.txt")
         json_path = os.path.join(output_dir, f"{base_name}.json")
 
-        # 檢查是否已經轉錄過 (避免重複執行)
         if os.path.exists(txt_path) and os.path.exists(json_path):
             print(f"⏭️  跳過已轉錄檔案: {file_name}")
             return txt_path
@@ -97,35 +68,51 @@ class PodcastTranscriber:
         start_time = time.time()
 
         try:
-            # 1. 取得 segments 生成器 與 音檔資訊
+            # 這裡把 condition_on_previous_text 設為 False，能大幅減少「幻覺迴圈」
             segments, info = self.model.transcribe(
                 audio_path, 
                 beam_size=5, 
-                language="zh", 
-                vad_filter=True
+                language=language, 
+                vad_filter=True,
+                initial_prompt=initial_prompt,
+                condition_on_previous_text=False 
             )
 
-            print(f"   ℹ️  語言: {info.language} (信心度: {info.language_probability:.2f}) | 長度: {info.duration:.2f}s")
+            print(f"   ℹ️  語言: {info.language} | 總長度: {info.duration:.2f} 秒")
             
             transcript_data = []
-            
-            # 使用 list 暫存，最後一次寫入，減少 IO (Colab 上 Drive 的 IO 比較慢)
             full_text_lines = []
             
-            # 寫入檔頭
             full_text_lines.append(f"來源: {file_name}")
             full_text_lines.append(f"模型: large-v3 | 時間: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             full_text_lines.append("-" * 50 + "\n")
 
-            # --- 2. 使用 tqdm 顯示進度條 ---
-            # total=info.duration : 設定進度條總長度為音檔秒數
-            # unit='s' : 單位顯示為秒
-            with tqdm(total=round(info.duration, 2), unit='s', desc="   Processing", leave=True) as pbar:
+            # --- 變數初始化：去重邏輯 ---
+            last_text = "" 
+            repeat_count = 0
+            MAX_REPEATS = 1  # 允許重複幾次？ 1 代表允許出現兩次 (原句 + 1次重複)
+
+            # 設定進度條
+            with tqdm(total=round(info.duration, 2), unit='s', desc="Processing", leave=True, ascii=True, ncols=100) as pbar:
                 for i, segment in enumerate(segments, 1):
+                    text = segment.text.strip()
+                    
+                    # --- 改良版去重邏輯 ---
+                    if text == last_text:
+                        repeat_count += 1
+                    else:
+                        repeat_count = 0  # 內容不同，重置計數器
+                    
+                    last_text = text # 更新上一句記錄
+
+                    # 如果重複次數超過閾值，則跳過 (視為幻覺)
+                    if repeat_count > MAX_REPEATS:
+                        continue
+                    # -----------------------
+
                     start_m, start_s = divmod(int(segment.start), 60)
                     end_m, end_s = divmod(int(segment.end), 60)
                     time_str = f"[{start_m:02d}:{start_s:02d} -> {end_m:02d}:{end_s:02d}]"
-                    text = segment.text.strip()
                     
                     line = f"{time_str} {text}"
                     full_text_lines.append(line)
@@ -142,7 +129,6 @@ class PodcastTranscriber:
                     # 我們將進度條更新到這個時間點
                     pbar.update(segment.end - pbar.n)
 
-            # 3. 寫入檔案
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(full_text_lines))
 
@@ -157,42 +143,71 @@ class PodcastTranscriber:
             print(f"❌ 失敗: {file_name} - {e}")
             return None
 
-    def transcribe_folder(self, folder_path: str):
-        """
-        批次轉錄資料夾內的所有音訊檔案
-        """
+    def transcribe_folder(self, folder_path: str, output_path: str, language: str, prompt: str):
         if not os.path.exists(folder_path):
             print(f"❌ 資料夾不存在: {folder_path}")
             return
 
-        # 支援的音訊格式
         audio_extensions = ('.mp3', '.m4a', '.wav', '.flac')
-        # 找出所有音訊檔
         files = [f for f in os.listdir(folder_path) if f.lower().endswith(audio_extensions)]
-        files.sort() # 排序，確保順序一致
+        files.sort()
         
         print(f"\n📂 處理資料夾: {folder_path} (共 {len(files)} 個檔案)")
+        print(f"📂 輸出位置: {output_path}")
+        
         for f in files:
-            self.transcribe_file(os.path.join(folder_path, f))
+            self.transcribe_file(
+                audio_path=os.path.join(folder_path, f),
+                output_dir=output_path,
+                language=language,
+                initial_prompt=prompt
+            )
 
-# --- 主程式區 ---
+# --- 主程式區 (User Configuration) ---
 if __name__ == "__main__":
-    # 1. 自動取得路徑
-    PROJECT_ROOT, AUDIO_DIR = get_paths()
+    # 1. 取得專案根目錄
+    PROJECT_ROOT = get_project_root()
     
-    # 2. 設定模型參數
-    # 如果是 Colab (有 GPU)，我們用 float16 跑比較快；本地 CPU 用 int8
+    # 2. --- 使用者設定區 (User Config) ---
+    # 您可以在這裡自由修改，完全不用動到上面的程式碼
+    
+    # [設定] 模型大小
+    MODEL_SIZE = "large-v3"
+    
+    # [設定] 音檔輸入與輸出位置
+    INPUT_AUDIO_DIR = os.path.join(PROJECT_ROOT, "data", "audio", "mt_taipei")
+    OUTPUT_TRANSCRIPT_DIR = os.path.join(PROJECT_ROOT, "data", "transcripts", "mt_taipei")
+    
+    # [設定] 轉錄參數
+    # 如果您的音檔不一定是繁中，這裡可以設為 None，讓模型自動偵測語言
+    # TARGET_LANGUAGE = None 
+    TARGET_LANGUAGE = "zh" 
+    
+    # Prompt 可以引導模型選字 (例如專有名詞)，也可以設為 None
+    INITIAL_PROMPT = "這是一段台灣閩南語與國語的混合對話。請將台語內容準確轉錄為繁體中文。"
+    # ------------------------------------
+    
+    # 3. 自動偵測環境
     is_colab = detect_environment()
     device = "cuda" if is_colab else "cpu"
     compute_type = "float16" if is_colab else "int8"
     
-    # 3. 初始化轉錄器
+    print(f"🔍 環境: {'Colab (GPU)' if is_colab else 'Local (CPU)'}")
+    if TARGET_LANGUAGE:
+        print(f"🎯 指定語言: {TARGET_LANGUAGE}")
+    else:
+        print(f"🌍 語言模式: 自動偵測")
+
+    # 4. 初始化並執行
     transcriber = PodcastTranscriber(
-        model_size="large-v3", 
+        model_size=MODEL_SIZE, 
         device=device, 
         compute_type=compute_type
     )
     
-    # 4. 執行轉錄
-    # 這裡會自動掃描 AUDIO_DIR 下的所有檔案
-    transcriber.transcribe_folder(AUDIO_DIR)
+    transcriber.transcribe_folder(
+        folder_path=INPUT_AUDIO_DIR,
+        output_path=OUTPUT_TRANSCRIPT_DIR,
+        language=TARGET_LANGUAGE,
+        prompt=INITIAL_PROMPT
+    )
