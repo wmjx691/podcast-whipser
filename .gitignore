@@ -13,6 +13,8 @@ __pycache__/
 
 # Credentials
 credentials.json
+client_secret.json
+token.json
 *.json
 
 # Windows / WSL 產生的替代資料流檔案
