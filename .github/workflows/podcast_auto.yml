@@ -48,4 +48,4 @@ jobs:
 
     - name: 🚀 Run Main Pipeline (Download, Transcribe, Upload)
       run: |
-        python src/main.py
+        python main.py
