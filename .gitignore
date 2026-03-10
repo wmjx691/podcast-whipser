@@ -10,3 +10,10 @@ __pycache__/
 
 # 忽略系統檔
 .DS_Store
+
+# Credentials
+credentials.json
+*.json
+
+# Windows / WSL 產生的替代資料流檔案
+*:Zone.Identifier
