@@ -1,0 +1,51 @@
+name: 自動轉錄 Podcast 並上傳 Drive
+
+# 設定觸發條件
+on:
+  # 1. 支援手動按鈕觸發 (方便我們隨時測試)
+  workflow_dispatch: 
+  
+  # 2. 設定排程 (Cron Job)
+  schedule:
+    # 台灣時間早上 10 點 = UTC 時間凌晨 2 點
+    # 1,4 代表星期一(1)與星期四(4)
+    - cron: '0 2 * * 1,4'
+
+jobs:
+  transcribe_and_upload:
+    runs-on: ubuntu-latest # 使用最新的 Linux 虛擬機
+    
+    steps:
+    - name: 📥 取得程式碼
+      uses: actions/checkout@v4
+
+    - name: 🐍 設定 Python 環境
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip' # 快取套件，讓未來執行更快
+
+    - name: 🛠️ 安裝系統套件與 FFmpeg
+      # Whisper 處理音檔需要用到底層的 ffmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+
+    - name: 📦 安裝 Python 依賴套件
+      run: |
+        pip install -r requirements.txt
+
+    - name: 🔑 準備環境變數與授權金鑰
+      # 把 GitHub Secrets 的內容還原成虛擬機裡的檔案和變數
+      env:
+        GCP_TOKEN: ${{ secrets.GCP_TOKEN_JSON }}
+      run: |
+        # 建立 .env 檔案
+        echo "DRIVE_FOLDER_ID=${{ secrets.DRIVE_FOLDER_ID }}" > .env
+        
+        # 建立 token.json 檔案
+        echo "$GCP_TOKEN" > token.json
+
+    - name: 🚀 執行主程式 (下載 -> 轉錄 -> 上傳)
+      run: |
+        python src/main.py
