@@ -32,6 +32,7 @@ class PodcastTranscriber:
         
         # s2twp 代表：Simplified to Traditional (Taiwan) with Phrases (包含台灣慣用語轉換)
         self.cc = OpenCC('s2twp')
+        self.model_size = model_size  # 🌟 新增：把模型大小存起來，之後寫 Metadata 會用到
 
         if not os.path.exists(model_root):
             os.makedirs(model_root)
@@ -50,7 +51,8 @@ class PodcastTranscriber:
             print(f"❌ 模型載入失敗: {e}")
             raise
 
-    def transcribe_file(self, audio_path: str, output_dir: str, language: str, initial_prompt: str) -> Optional[str]:
+    # 🌟 新增：加入 force_retranscribe 參數
+    def transcribe_file(self, audio_path: str, output_dir: str, language: str, initial_prompt: str, force_retranscribe: bool = False) -> Optional[str]:
         if not os.path.exists(audio_path):
             print(f"❌ 錯誤：找不到檔案 {audio_path}")
             return None
@@ -64,9 +66,13 @@ class PodcastTranscriber:
         txt_path = os.path.join(output_dir, f"{base_name}.txt")
         json_path = os.path.join(output_dir, f"{base_name}.json")
 
+        # 🌟 修改：跳過邏輯加上 force_retranscribe 的判斷
         if os.path.exists(txt_path) and os.path.exists(json_path):
-            print(f"⏭️  跳過已轉錄檔案: {file_name}")
-            return txt_path
+            if not force_retranscribe:
+                print(f"⏭️  跳過已轉錄檔案: {file_name}")
+                return txt_path
+            else:
+                print(f"⚠️  強制重轉模式啟動，即將覆蓋舊檔: {file_name}")
 
         print(f"\n🎙️  開始轉錄: {file_name}")
         start_time = time.time()
@@ -84,24 +90,25 @@ class PodcastTranscriber:
 
             print(f"   ℹ️  語言: {info.language} | 總長度: {info.duration:.2f} 秒")
             
-            transcript_data = []
+            segments_data = [] # 用來存純對話片段
             full_text_lines = []
             
             full_text_lines.append(f"來源: {file_name}")
-            full_text_lines.append(f"模型: large-v3 | 時間: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+            # 🌟 修改：動態填入真實的模型大小，不再寫死 large-v3
+            full_text_lines.append(f"模型: {self.model_size} | 時間: {time.strftime('%Y-%m-%d %H:%M:%S')}")
             full_text_lines.append("-" * 50 + "\n")
 
             # --- 變數初始化：去重邏輯 ---
             last_text = "" 
             repeat_count = 0
-            MAX_REPEATS = 1  # 允許重複幾次？ 1 代表允許出現兩次 (原句 + 1次重複)
+            MAX_REPEATS = 1   # 允許重複幾次？ 1 代表允許出現兩次 (原句 + 1次重複)
 
             # 設定進度條
             with tqdm(total=round(info.duration, 2), unit='s', desc="Processing", leave=True, ascii=True, ncols=100) as pbar:
                 for i, segment in enumerate(segments, 1):
                     raw_text = segment.text.strip()
                     
-                    # --- 新增：強制轉繁體 ---
+                    # --- 強制轉繁體 ---
                     text = self.cc.convert(raw_text)
                     
                     # --- 改良版去重邏輯 ---
@@ -115,7 +122,6 @@ class PodcastTranscriber:
                     # 如果重複次數超過閾值，則跳過 (視為幻覺)
                     if repeat_count > MAX_REPEATS:
                         continue
-                    # -----------------------
 
                     start_m, start_s = divmod(int(segment.start), 60)
                     end_m, end_s = divmod(int(segment.end), 60)
@@ -124,7 +130,7 @@ class PodcastTranscriber:
                     line = f"{time_str} {text}"
                     full_text_lines.append(line)
                     
-                    transcript_data.append({
+                    segments_data.append({
                         "id": i,
                         "start": segment.start,
                         "end": segment.end,
@@ -136,11 +142,26 @@ class PodcastTranscriber:
                     # 我們將進度條更新到這個時間點
                     pbar.update(segment.end - pbar.n)
 
+            # 寫入 TXT
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(full_text_lines))
 
+            # 🌟 新增：建構包含 Metadata 的全新 JSON 結構
+            env_name = "Colab" if detect_environment() else "Local/GitHub Actions"
+            final_json_data = {
+                "metadata": {
+                    "model_size": self.model_size,
+                    "environment": env_name,
+                    "language": info.language,
+                    "prompt": initial_prompt,
+                    "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S')
+                },
+                "segments": segments_data
+            }
+
+            # 寫入 JSON
             with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(transcript_data, f, ensure_ascii=False, indent=2)
+                json.dump(final_json_data, f, ensure_ascii=False, indent=2)
 
             duration = time.time() - start_time
             print(f"✅ 完成！耗時: {duration:.2f}s")
@@ -150,7 +171,8 @@ class PodcastTranscriber:
             print(f"❌ 失敗: {file_name} - {e}")
             return None
 
-    def transcribe_folder(self, folder_path: str, output_path: str, language: str, prompt: str):
+    # 🌟 修改：加入 force_retranscribe 參數並往下傳遞
+    def transcribe_folder(self, folder_path: str, output_path: str, language: str, prompt: str, force_retranscribe: bool = False):
         if not os.path.exists(folder_path):
             print(f"❌ 資料夾不存在: {folder_path}")
             return
@@ -167,7 +189,8 @@ class PodcastTranscriber:
                 audio_path=os.path.join(folder_path, f),
                 output_dir=output_path,
                 language=language,
-                initial_prompt=prompt
+                initial_prompt=prompt,
+                force_retranscribe=force_retranscribe
             )
 
 # --- 主程式區 (User Configuration) ---
@@ -191,7 +214,7 @@ if __name__ == "__main__":
     TARGET_LANGUAGE = "zh" 
     
     # Prompt 可以引導模型選字 (例如專有名詞)，也可以設為 None
-    INITIAL_PROMPT = "這是一段台灣閩南語與國語的混合對話。請將台語內容準確轉錄為繁體中文。"
+    INITIAL_PROMPT = "這是一段Podcast對話。請將語音內容準確轉錄為繁體中文。"
     # ------------------------------------
     
     # 3. 自動偵測環境

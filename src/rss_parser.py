@@ -4,9 +4,9 @@ import sys
 import requests
 import re
 from tqdm import tqdm
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional, Union, Set
 
-# --- 1. 環境設定區 (與 transcriber.py 共用邏輯) ---
+# --- 1. 環境設定區 ---
 def detect_environment():
     """偵測是否在 Colab 環境"""
     return "COLAB_RELEASE_TAG" in os.environ or 'google.colab' in sys.modules
@@ -49,7 +49,6 @@ class PodcastDownloader:
     def parse_feed(self) -> List[Dict]:
         """解析 RSS Feed 並提取集數資訊"""
         print(f"📡 正在解析 RSS: {self.rss_url} ...")
-        
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
@@ -98,17 +97,20 @@ class PodcastDownloader:
         print(f"📊 共找到 {len(self.episodes)} 集節目。")
         return self.episodes
 
+    # 🌟 新增：統一的檔名清理器，確保拿來比對的檔名跟實際存檔的檔名一模一樣
+    def get_safe_basename(self, title: str) -> str:
+        safe_title = title[:40] # 截斷標題避免過長
+        return re.sub(r'[\\/*?:"<>|]', '', safe_title).strip()
+
     def download_file(self, url: str, filename: str) -> Optional[str]:
-        """下載單一檔案 (含進度條)"""
-        # 清理檔名非法字元
-        safe_filename = re.sub(r'[\\/*?:"<>|]', '', filename).strip()
-        file_path = os.path.join(self.save_dir, safe_filename)
+        # 這裡的 safe_filename 已經透過 get_safe_basename 處理過了
+        file_path = os.path.join(self.save_dir, filename)
 
         if os.path.exists(file_path):
-            print(f"⏭️  檔案已存在，跳過: {safe_filename}")
+            print(f"⏭️  本地音檔已存在，跳過下載: {filename}")
             return file_path
 
-        print(f"⬇️  開始下載: {safe_filename}")
+        print(f"⬇️  開始下載: {filename}")
         try:
             response = requests.get(url, stream=True)
             response.raise_for_status()
@@ -131,44 +133,71 @@ class PodcastDownloader:
                 os.remove(file_path) # 下載失敗則刪除殘檔
             return None
 
-    def download_specific_episodes(self, target_numbers: List[int]):
-        """下載指定集數 (您要的功能)"""
+# 🌟 修改：加入 completed_eps 參數作為第二層過濾黑名單
+    def download_specific_episodes(self, target_numbers: List[int], completed_bases: Set[str] = None, completed_eps: Set[int] = None):
+        """下載指定集數"""
         if not self.episodes:
             self.parse_feed()
-
+            
+        completed_bases = completed_bases or set()
+        completed_eps = completed_eps or set() # 🌟 新增：初始化 completed_eps
         print(f"\n🎯 準備下載指定集數: {target_numbers}")
         
-        # 轉換成 Set 加速搜尋
         targets_set = set(target_numbers)
+        downloaded_files = [] # 🌟 新增：紀錄成功下載或已存在的檔案，回傳給 main.py
         
         for ep in self.episodes:
             if ep['ep_number'] in targets_set:
-                # 檔名範例: EP418_標題.mp3
-                # 取得副檔名
+                base_name = self.get_safe_basename(ep['title'])
+                
+                # 🌟 核心攔截邏輯：檔名完全一致，或是「EP集數」一致，就直接跳過！
+                if base_name in completed_bases or (ep['ep_number'] is not None and ep['ep_number'] in completed_eps):
+                    print(f"⏭️  情報顯示已完成轉錄，攔截下載: EP{ep['ep_number']} ({base_name})")
+                    targets_set.remove(ep['ep_number'])
+                    continue
+                
                 ext = ".mp3"
                 if "m4a" in ep['url']: ext = ".m4a"
+                filename = f"{base_name}{ext}"
                 
-                safe_title = ep['title'][:40] # 截斷標題避免過長
-                filename = f"{safe_title}{ext}"
-                
-                self.download_file(ep['url'], filename)
+                file_path = self.download_file(ep['url'], filename)
+                if file_path:
+                    downloaded_files.append(filename)
                 targets_set.remove(ep['ep_number'])
 
         if targets_set:
             print(f"⚠️ 找不到以下集數 (可能未在 Feed 中或格式不符): {sorted(list(targets_set))}")
+            
+        return downloaded_files
 
-    def download_recent_episodes(self, count: int = 3):
-        """下載最新 N 集 (Colab 測試方便用)"""
+# 🌟 修改：加入 completed_eps 參數作為第二層過濾
+    def download_recent_episodes(self, count: int = 3, completed_bases: Set[str] = None, completed_eps: Set[int] = None):
+        """下載最新 N 集"""
         if not self.episodes:
             self.parse_feed()
             
-        print(f"\n🆕 準備下載最新 {count} 集")
+        completed_bases = completed_bases or set()
+        completed_eps = completed_eps or set()
+        print(f"\n🆕 準備檢查並下載最新 {count} 集")
+        downloaded_files = []
+        
         for ep in self.episodes[:count]:
+            base_name = self.get_safe_basename(ep['title'])
+            
+            # 🌟 核心攔截邏輯：檔名完全一致，或是「EP集數」一致，就直接跳過！
+            if base_name in completed_bases or (ep['ep_number'] is not None and ep['ep_number'] in completed_eps):
+                print(f"⏭️  情報顯示已完成轉錄，攔截下載: EP{ep['ep_number']} ({base_name})")
+                continue
+                
             ext = ".mp3"
             if "m4a" in ep['url']: ext = ".m4a"
-            safe_title = ep['title'][:40]
-            filename = f"{safe_title}{ext}"
-            self.download_file(ep['url'], filename)
+            filename = f"{base_name}{ext}"
+            
+            file_path = self.download_file(ep['url'], filename)
+            if file_path:
+                downloaded_files.append(filename)
+                
+        return downloaded_files
 
 # --- 3. 使用者設定與執行區 ---
 if __name__ == "__main__":

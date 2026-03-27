@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+from typing import List, Optional
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -50,8 +52,29 @@ def get_oauth_credentials():
             
     return creds
 
+# --- 🌟 新增：尋找或自動建立雲端子資料夾 ---
+def get_or_create_drive_subfolder(service, parent_id: str, folder_name: str) -> str:
+    """在指定的父資料夾內尋找子資料夾，若無則自動建立。回傳子資料夾的 ID。"""
+    query = f"'{parent_id}' in parents and name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get('files', [])
+    
+    if items:
+        return items[0]['id'] # 找到了，直接回傳 ID
+    
+    # 找不到，自動幫使用者建立
+    print(f"📁 雲端尚未有此節目的資料夾，正在自動建立子資料夾: {folder_name} ...")
+    file_metadata = {
+        'name': folder_name,
+        'parents': [parent_id],
+        'mimeType': 'application/vnd.google-apps.folder'
+    }
+    folder = service.files().create(body=file_metadata, fields='id').execute()
+    return folder.get('id')
+
 # --- 3. Google Drive 上傳邏輯 ---
-def upload_files_to_drive(folder_id: str, target_dir: str = None):
+# 由總司令 main.py 來指定要上傳哪些檔案
+def upload_files_to_drive(folder_id: str, target_dir: str = None, files_to_upload: Optional[List[str]] = None, podcast_name: str = None):
     if target_dir is None:
         project_root = get_project_root()
         transcripts_dir = os.path.join(project_root, "data", "transcripts")
@@ -70,42 +93,56 @@ def upload_files_to_drive(folder_id: str, target_dir: str = None):
         print(f"❌ API 驗證失敗: {e}")
         return
 
-    # --- 🌟 新增：取得雲端硬碟目標資料夾內已有的檔案清單 ---
-    print(f"🔍 正在檢查雲端資料夾內已存在的檔案...")
-    existing_file_names = set()
-    try:
-        # 使用 q 語法查詢該 folder_id 底下且未被丟入垃圾桶的檔案
-        query = f"'{folder_id}' in parents and trashed=false"
-        # 執行查詢，我們只需要檔案的 id 和 name
-        results = service.files().list(q=query, fields="files(id, name)").execute()
-        items = results.get('files', [])
-        
-        for item in items:
-            existing_file_names.add(item['name'])
-            
-    except Exception as e:
-        print(f"⚠️ 無法取得雲端檔案清單，將執行全量上傳。錯誤: {e}")
-    # -----------------------------------------------------
+    # 如果 main.py 沒有特別指定，就抓資料夾內所有的 .txt 和 .json
+    if files_to_upload is None:
+        actual_files = [f for f in os.listdir(transcripts_dir) if f.endswith(('.txt', '.json'))]
+    else:
+        actual_files = files_to_upload
 
-    files_to_upload = [f for f in os.listdir(transcripts_dir) if f.endswith(('.txt', '.json'))]
-    if not files_to_upload:
-        print("⚠️ 沒有找到任何 .txt 或 .json 檔案需要上傳。")
+    if not actual_files:
+        print("⚠️ 沒有需要上傳的檔案。")
         return
 
-    print(f"📂 準備比對並上傳 {len(files_to_upload)} 個檔案至 Google Drive...")
+    # 🌟 修改：根據 podcast_name 決定最終上傳的目標 ID
+    upload_target_id = folder_id
+    if podcast_name:
+        upload_target_id = get_or_create_drive_subfolder(service, folder_id, podcast_name)
 
-    for filename in files_to_upload:
-        # --- 🌟 新增：過濾判斷式 ---
-        if filename in existing_file_names:
-            print(f"⏭️  雲端已存在，跳過上傳: {filename}")
-            continue # 直接跳過這個檔案，進入下一個迴圈
-        # ------------------------
-        
+    print(f"📂 準備上傳 {len(actual_files)} 個檔案至 Google Drive 子資料夾...")
+
+    for filename in actual_files:
         filepath = os.path.join(transcripts_dir, filename)
+        if not os.path.exists(filepath):
+            print(f"⚠️ 找不到檔案，跳過上傳: {filename}")
+            continue
+
+        base_name = os.path.splitext(filename)[0]
+        json_filepath = os.path.join(transcripts_dir, f"{base_name}.json")
+
+        # --- 看本地 JSON 檔的 Metadata 準備做成雲端標籤 ---
+        app_properties = {}
+        if os.path.exists(json_filepath):
+            try:
+                with open(json_filepath, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    metadata = data.get("metadata", {})
+                    if metadata:
+                        app_properties = {
+                            "model_size": metadata.get("model_size", "unknown"),
+                            "environment": metadata.get("environment", "unknown")
+                        }
+            except Exception as e:
+                pass
+
         file_metadata = {
             'name': filename,
-            'parents': [folder_id]
+            'parents': [upload_target_id] # 🌟 修改：傳到對應的子資料夾
         }
+        
+        # 將抽出來的 Metadata 塞進 Google Drive 的隱藏屬性 appProperties 裡面
+        if app_properties:
+            file_metadata['appProperties'] = app_properties
+
         mimetype = 'application/json' if filename.endswith('.json') else 'text/plain'
         media = MediaFileUpload(filepath, mimetype=mimetype, resumable=True)
 
