@@ -18,8 +18,8 @@ def get_project_root():
     else:
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 只請求 Google Drive 的檔案建立權限
-SCOPES = ['https://www.googleapis.com/auth/drive.file']
+# 開啟 Google Drive 全域讀寫權限
+SCOPES = ['https://www.googleapis.com/auth/drive']
 
 # --- 2. OAuth 2.0 驗證邏輯 ---
 def get_oauth_credentials():
@@ -42,9 +42,9 @@ def get_oauth_credentials():
             if not os.path.exists(client_secret_path):
                 raise FileNotFoundError(f"❌ 找不到 {client_secret_path}，請確認是否已下載 OAuth 憑證！")
             flow = InstalledAppFlow.from_client_secrets_file(client_secret_path, SCOPES)
-            # 加入 open_browser=False，並指定一個固定 port (例如 8080)
+            # 加入 open_browser=False，並指定一個 port (例如 0)，避免在某些環境下無法自動開啟瀏覽器的問題
             print("請複製下方的網址，貼到您電腦的瀏覽器中開啟並完成授權：")
-            creds = flow.run_local_server(port=8080, open_browser=False, bind_addr='127.0.0.1')
+            creds = flow.run_local_server(port=0, open_browser=False, bind_addr='127.0.0.1')
             
         # 把拿到的授權存進 token.json，下次就不用再開網頁登入了！
         with open(token_path, 'w') as token:

@@ -49,7 +49,10 @@ def main():
 # --- 先建立雲端已存在的 EP 數字清單 ---
     drive_eps = set()
     for base_name, info in status_report.items():
-        if info.get("transcript", {}).get("location") == "drive":
+        # 先把 transcript 的狀態取出來
+        transcript_info = info.get("transcript")
+        # 確保 transcript_info 不是 None，才去讀取 location
+        if transcript_info and transcript_info.get("location") == "drive":
             ep_match = re.search(r"(?i)EP\.?\s*(\d+)", base_name)
             if ep_match:
                 drive_eps.add(int(ep_match.group(1)))
