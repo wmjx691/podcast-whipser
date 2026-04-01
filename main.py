@@ -98,18 +98,26 @@ def main():
 
     # --- 步驟二：執行語音轉錄 ---
     print("\n>> [步驟 2/4]: 執行 Whisper 語音轉錄...")
-    is_colab = detect_environment()
-    device = "cuda" if is_colab else "cpu"
-    compute_type = "float16" if is_colab else "int8"
     
-    transcriber = PodcastTranscriber(model_size=TARGET_MODEL, device=device, compute_type=compute_type)
-    transcriber.transcribe_folder(
-        folder_path=audio_dir,
-        output_path=transcript_dir,
-        language="zh",
-        prompt="這是一段Podcast對話。請將語音內容準確轉錄為繁體中文。",
-        force_retranscribe=FORCE_RETRANSCRIBE
-    )
+    if not download_result:
+        print("⏭️ 這次沒有需要轉錄的新檔案或指定集數。")
+    else:
+        is_colab = detect_environment()
+        device = "cuda" if is_colab else "cpu"
+        compute_type = "float16" if is_colab else "int8"
+    
+        transcriber = PodcastTranscriber(model_size=TARGET_MODEL, device=device, compute_type=compute_type)
+        
+        # 🌟 核心修改：不再掃描整個資料夾，而是精準針對這次指定的檔案名單進行轉錄
+        for file_name in download_result:
+            audio_path = os.path.join(audio_dir, file_name)
+            transcriber.transcribe_file(
+                audio_path=audio_path,
+                output_dir=transcript_dir,
+                language="zh",
+                initial_prompt="這是一段Podcast對話。請將語音內容準確轉錄為繁體中文。",
+                force_retranscribe=FORCE_RETRANSCRIBE
+            )
 
     # --- 步驟三：彙整待上傳清單 ---
     print("\n>> [步驟 3/4]: 盤點需要上傳至雲端的檔案...")
