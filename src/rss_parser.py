@@ -6,10 +6,7 @@ import re
 from tqdm import tqdm
 from typing import List, Dict, Optional, Union, Set
 
-# --- 1. 環境設定區 ---
-def detect_environment():
-    """偵測是否在 Colab 環境"""
-    return "COLAB_RELEASE_TAG" in os.environ or 'google.colab' in sys.modules
+from utils import get_project_root, detect_environment
 
 def get_project_root():
     """回傳專案根目錄"""
@@ -24,7 +21,7 @@ def get_project_root():
         # 本地路徑
         return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# --- 2. 核心下載器類別 ---
+# --- 1. 核心下載器類別 ---
 class PodcastDownloader:
     def __init__(self, rss_url: str, sub_dir: str = "downloads"):
         """
@@ -199,7 +196,7 @@ class PodcastDownloader:
                 
         return downloaded_files
 
-# --- 3. 使用者設定與執行區 ---
+# --- 2. 使用者設定與執行區 ---
 if __name__ == "__main__":
     
     # 範例 RSS (Open House 歐本豪斯)

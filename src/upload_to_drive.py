@@ -8,20 +8,13 @@ from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-# --- 1. 環境與路徑設定 ---
-def detect_environment():
-    return "COLAB_RELEASE_TAG" in os.environ or 'google.colab' in sys.modules
+from utils import get_project_root
 
-def get_project_root():
-    if detect_environment():
-        return '/content/drive/MyDrive/MyProject/whisper'
-    else:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 開啟 Google Drive 全域讀寫權限
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
-# --- 2. OAuth 2.0 驗證邏輯 ---
+# --- 1. OAuth 2.0 驗證邏輯 ---
 def get_oauth_credentials():
     project_root = get_project_root()
     token_path = os.path.join(project_root, 'token.json')
@@ -52,7 +45,7 @@ def get_oauth_credentials():
             
     return creds
 
-# --- 🌟 新增：尋找或自動建立雲端子資料夾 ---
+# --- 2. 尋找或自動建立雲端子資料夾 ---
 def get_or_create_drive_subfolder(service, parent_id: str, folder_name: str) -> str:
     """在指定的父資料夾內尋找子資料夾，若無則自動建立。回傳子資料夾的 ID。"""
     query = f"'{parent_id}' in parents and name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"

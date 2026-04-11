@@ -7,22 +7,8 @@ from typing import Optional
 from tqdm import tqdm
 from opencc import OpenCC
 
-# --- 環境與路徑輔助函式 ---
-def detect_environment():
-    """偵測是否在 Colab 環境"""
-    return "COLAB_RELEASE_TAG" in os.environ or 'google.colab' in sys.modules
+from utils import get_project_root, detect_environment
 
-def get_project_root():
-    """回傳專案根目錄"""
-    if detect_environment():
-        if os.path.exists('/content/drive'):
-             pass
-        else:
-             print("⚠️ 注意：在腳本模式下無法互動掛載 Drive，請確保外部 Notebook 已執行 drive.mount()")
-        # ⚠️ 請確認您的 Drive 路徑是否正確
-        return '/content/drive/MyDrive/MyProject/whisper'
-    else:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # --- 核心轉錄類別 ---
 class PodcastTranscriber:
