@@ -7,3 +7,4 @@ google-auth-oauthlib
 python-dotenv
 opencc-python-reimplemented
 tqdm
+yt-dlp

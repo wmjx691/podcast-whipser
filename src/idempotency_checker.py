@@ -142,14 +142,14 @@ class IdempotencyChecker:
                 unique_eps.add(int(ep_match.group(1)))
             else:
                 # 找不到 EP 號碼，列入幽靈名單
-                ghost_files.append(base)
+                # ghost_files.append(base)
                 unique_eps.add(base) 
             
         print(f"✅ 情報掃描完成！共發現 {len(unique_eps)} 集 {self.podcast_name} 節目的紀錄。")
-        # 印出抓鬼名單，讓您知道是誰搞鬼
-        if ghost_files:
-            print(f"👻 注意：發現 {len(ghost_files)} 個無法辨識集數的幽靈檔案:")
-            for ghost in ghost_files:
-                print(f"   - {ghost}")
+        # # 印出抓鬼名單，讓您知道是誰搞鬼
+        # if ghost_files:
+        #     print(f"👻 注意：發現 {len(ghost_files)} 個無法辨識集數的幽靈檔案:")
+        #     for ghost in ghost_files:
+        #         print(f"   - {ghost}")
             
         return comprehensive_status
